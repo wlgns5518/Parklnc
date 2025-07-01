@@ -1,0 +1,52 @@
+v1.7.0
+Template: Added Unity 6 support
+Defines: Fixed an issue with defines recalculation during the first import
+Defines: Reworked the define disable check. Instead of checking the file path, the system now verifies if the script type exists
+Core: Fixed Promotion window image size on 4k displays
+Core: Added the StaticUnloader script. It allows unloading static variables to support fast game launches (Editor only)
+Tween: Reworked the Tween script structure
+Tween: Added static unload functionality for Tween
+Tween: Reworked NextFrame tween logic
+Save: Removed unused variable
+Core: The script names have been changed to use singular instead of plural (e.g., CurrenciesController is now CurrencyController)
+Currency: Reworked CurrencyController.GetCurrency method (editor only)
+Monetization: A full-screen loading message has been added before displaying interstitial and rewarded video ads
+
+v1.6.1
+Level Editor improvement
+
+v1.6.0
+Added IAP Store
+Core updated
+
+v1.5.2
+Watermelon Core update
+All VFX reworked
+Improved mobile vibration
+Reworked game graphics
+
+v1.5
+Watermelon Core update (new project structure, optimization of core modules)
+New in-game store
+
+v1.4
+Unity 2022 support
+Core update
+
+v1.3.6
+Unity 2021 support
+Core update
+Bugfixes
+
+v1.2
+Store currency cloud
+Store adjustments (pages)
+Bugfixes
+
+v1.1
+Store
+Bugfixes
+Core update
+
+v1.0
+Base

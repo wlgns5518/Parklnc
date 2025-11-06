@@ -37,83 +37,19 @@ public class SpawnObstacle : MonoBehaviour
         if (GameManager.Instance != null)
             level = GameManager.Instance.CurrentLevel;
         Debug.Log(level);
+
         // 1. 격자 생성
         gridWidth = Mathf.CeilToInt((installMax.x - installMin.x) / cellSize);
         gridHeight = Mathf.CeilToInt((installMax.y - installMin.y) / cellSize);
 
-        // 2. 경로 찾기 (A* 알고리즘, 난이도 반영)
-        List<Vector2Int> path = FindPathWithExactTurns(level);
+        // 2. 1회 탐색으로 레벨 코너 수 맞추기
+        List<Vector2Int> path = FindPathWithRandomWeight(level);
 
         // 3. 장애물 배치
         PlaceObstacles(path);
     }
 
-    List<Vector2Int> FindPathWithExactTurns(int requiredTurns)
-    {
-        // 레벨 1(턴 1개)일 때만 L자 경로 생성
-        if (requiredTurns == 1)
-        {
-            Vector2Int start = WorldToGrid(carStart);
-            Vector2Int end = WorldToGrid(carEnd);
-            var path = new List<Vector2Int>();
-
-            // y축(세로)로 먼저 이동
-            for (int y = start.y; y != end.y; y += (end.y > start.y ? 1 : -1))
-                path.Add(new Vector2Int(start.x, y));
-            // x축(가로)로 이동
-            for (int x = start.x; x != end.x; x += (end.x > start.x ? 1 : -1))
-                path.Add(new Vector2Int(x, end.y));
-            // 마지막 도착점 추가
-            path.Add(end);
-            Vector2Int mustInclude = new Vector2Int(1, 0);
-            // (1,0)이 경로에 없으면 맨 앞에 추가
-            if (path.Count == 0 || path[0] != mustInclude)
-                path.Insert(0, mustInclude);
-
-            return path;
-        }
-        List<Vector2Int> matchedPath = null;
-        int minTurnDiff = int.MaxValue;
-        int tryCount = 50;
-
-        for (int i = 0; i < tryCount; i++)
-        {
-            List<Vector2Int> path = FindPathWithRandomWeight(i);
-            if (path.Count == 0) continue;
-
-            int turns = CountTurns(path);
-            int turnDiff = Mathf.Abs(turns - requiredTurns);
-
-            if (turns == requiredTurns)
-                return path;
-
-            if (turnDiff < minTurnDiff)
-            {
-                minTurnDiff = turnDiff;
-                matchedPath = path;
-            }
-        }
-        return matchedPath ?? new List<Vector2Int>();
-    }
-
-    int CountTurns(List<Vector2Int> path)
-    {
-        if (path == null || path.Count < 2) return 0;
-        int turns = 0;
-        Vector2Int prevDir = path[1] - path[0];
-        for (int i = 2; i < path.Count; i++)
-        {
-            Vector2Int dir = path[i] - path[i - 1];
-            if (dir != prevDir)
-            {
-                turns++;
-                prevDir = dir;
-            }
-        }
-        return turns;
-    }
-
-    List<Vector2Int> FindPathWithRandomWeight(int seedOffset)
+    List<Vector2Int> FindPathWithRandomWeight(int level)
     {
         Vector2Int start = WorldToGrid(carStart);
         Vector2Int end = WorldToGrid(carEnd);
@@ -123,42 +59,73 @@ public class SpawnObstacle : MonoBehaviour
         var cameFrom = new Dictionary<Vector2Int, Vector2Int>();
         var gScore = new Dictionary<Vector2Int, float> { [start] = 0 };
         var fScore = new Dictionary<Vector2Int, float> { [start] = Heuristic(start, end) };
+        var turnScore = new Dictionary<Vector2Int, int> { [start] = 0 };
 
-        System.Random rand = new System.Random(System.DateTime.Now.Millisecond + seedOffset);
+        System.Random rand = new System.Random();
 
         while (open.Count > 0)
         {
-            open.Sort((a, b) => fScore.GetValueOrDefault(a, float.MaxValue).CompareTo(fScore.GetValueOrDefault(b, float.MaxValue)));
+            open.Sort((a, b) =>
+                fScore.GetValueOrDefault(a, float.MaxValue)
+                .CompareTo(fScore.GetValueOrDefault(b, float.MaxValue)));
+
             var current = open[0];
+            open.RemoveAt(0);
+
+            // 목표 도달
             if (current == end)
             {
-                List<Vector2Int> path = ReconstructPath(cameFrom, current);
-
-                // (1,0)이 경로에 없으면 맨 앞에 추가
+                var path = ReconstructPath(cameFrom, current);
                 if (path.Count == 0 || path[0] != mustInclude)
                     path.Insert(0, mustInclude);
-
+                Debug.Log(turnScore[current]);
                 return path;
             }
 
-            open.RemoveAt(0);
-
             foreach (var neighbor in GetNeighbors(current))
             {
-                float randomWeight = (float)rand.NextDouble() * 2.0f;
+                //  이전 방향이 존재하는 경우에만 turn 계산
+                bool hasPrev = cameFrom.ContainsKey(current);
+                bool isTurn = false;
+
+                if (hasPrev)
+                {
+                    Vector2Int prev = cameFrom[current];
+                    Vector2Int dirPrev = (current - prev);
+                    Vector2Int dirNow = (neighbor - current);
+                    isTurn = (dirPrev != dirNow);
+                }
+
+                int newTurnCount = turnScore[current] + (isTurn ? 1 : 0);
+
+                //  turn limit 초과 시 확장 금지
+                if (newTurnCount > level)
+                    continue;
+
+                //  turn == level이면 이후 탐색은 순수 최단거리
+                float randomWeight = (newTurnCount < level)
+                    ? (float)rand.NextDouble() * 2.0f
+                    : 0.0f;
+
                 float tentativeG = gScore[current] + 1 + randomWeight;
+
                 if (tentativeG < gScore.GetValueOrDefault(neighbor, float.MaxValue))
                 {
                     cameFrom[neighbor] = current;
                     gScore[neighbor] = tentativeG;
                     fScore[neighbor] = tentativeG + Heuristic(neighbor, end);
+                    turnScore[neighbor] = newTurnCount;
+
                     if (!open.Contains(neighbor))
                         open.Add(neighbor);
                 }
             }
         }
+
         return new List<Vector2Int>();
     }
+
+
 
     float Heuristic(Vector2Int a, Vector2Int b)
     {

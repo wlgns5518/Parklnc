@@ -7,160 +7,285 @@ public class SpawnObstacle : MonoBehaviour
     public struct ObstacleInfo
     {
         public GameObject prefab;
-        public Vector2 sizeXZ; // size.x = width (x), size.y = depth (z)
+        public Vector2 sizeXZ; // size.x = width(x), size.y = depth(z)
     }
 
     public List<ObstacleInfo> obstacleList;
 
-    public Vector2 installMin = new Vector2(0f, 1f);     // x, z
-    public Vector2 installMax = new Vector2(40f, 19f);   // x, z
+    public Vector2 installMin = new Vector2(0f, 1f);
+    public Vector2 installMax = new Vector2(40f, 19f);
 
-    public Vector2 carStart = new Vector2(3f, 3f);       // x, z
-    public Vector2 carEnd = new Vector2(37f, 17.5f);     // x, z
+    public Vector2 carStart = new Vector2(3f, 3f);
+    public Vector2 carEnd = new Vector2(37f, 17.5f);
 
-    public float cellSize = 2f; // 격자 셀 크기
+    public float cellSize = 2f;
 
-    int gridWidth, gridHeight;
+    public ObjectPool objectPool;
 
-    public ObjectPool objectPool; // 인스펙터에서 할당
+    int gridWidth;
+    int gridHeight;
+
+    // Forced second cell for initial corner logic (kept from original)
+    readonly Vector2Int mustInclude = new Vector2Int(1, 0);
+
+    // Directions (L R D U)
+    static readonly Vector2Int[] Directions =
+    {
+        Vector2Int.left, Vector2Int.right, Vector2Int.down, Vector2Int.up
+    };
 
     void Start()
     {
-        // 오브젝트 풀 미리 생성
-        foreach (var obstacle in obstacleList)
+        // Preload obstacles
+        if (objectPool != null)
         {
-            objectPool.Preload(obstacle.prefab, 10, transform);
+            foreach (var o in obstacleList)
+                objectPool.Preload(o.prefab, 10, transform);
         }
 
-        // GameManager에서 레벨 받아오기
         int level = 1;
         if (GameManager.Instance != null)
             level = GameManager.Instance.CurrentLevel;
-        Debug.Log(level);
 
-        // 1. 격자 생성
         gridWidth = Mathf.CeilToInt((installMax.x - installMin.x) / cellSize);
         gridHeight = Mathf.CeilToInt((installMax.y - installMin.y) / cellSize);
 
-        // 2. 1회 탐색으로 레벨 코너 수 맞추기
-        List<Vector2Int> path = FindPathWithRandomWeight(level);
-
-        // 3. 장애물 배치
+        var path = FindPathWithRandomWeight(level);
         PlaceObstacles(path);
     }
 
     List<Vector2Int> FindPathWithRandomWeight(int level)
     {
+        const int safetyAttempts = 200;
+
+        List<Vector2Int> bestPath = null;
+        int bestTurnDiff = int.MaxValue;
+
+        for (int i = 0; i < safetyAttempts; i++)
+        {
+            var (path, turns) = TryFindPath(level);
+            if (path == null) continue;
+
+            int diff = Mathf.Abs(turns - level);
+            if (diff < bestTurnDiff)
+            {
+                bestTurnDiff = diff;
+                bestPath = path;
+            }
+
+            if (turns == level)
+            {
+                Debug.Log($"코너 {level}개 정확히 생성 성공 (attempt {i})");
+                return path;
+            }
+        }
+
+        Debug.LogWarning($"정확한 코너 {level}개 실패 → 가장 가까운 경로 반환 (turnDiff {bestTurnDiff})");
+        return bestPath;
+    }
+
+    (List<Vector2Int> path, int turns) TryFindPath(int level)
+    {
         Vector2Int start = WorldToGrid(carStart);
         Vector2Int end = WorldToGrid(carEnd);
-        Vector2Int mustInclude = new Vector2Int(1, 0);
 
-        var open = new List<Vector2Int> { start };
-        var cameFrom = new Dictionary<Vector2Int, Vector2Int>();
-        var gScore = new Dictionary<Vector2Int, float> { [start] = 0 };
-        var fScore = new Dictionary<Vector2Int, float> { [start] = Heuristic(start, end) };
-        var turnScore = new Dictionary<Vector2Int, int> { [start] = 0 };
+        // Allocate arrays (fast, avoids dictionary overhead)
+        float[,] gScore = new float[gridWidth, gridHeight];
+        int[,] turnScore = new int[gridWidth, gridHeight];
+        Vector2Int[,] parent = new Vector2Int[gridWidth, gridHeight];
+        bool[,] closed = new bool[gridWidth, gridHeight];
 
-        System.Random rand = new System.Random();
+        // Initialize
+        for (int x = 0; x < gridWidth; x++)
+        {
+            for (int y = 0; y < gridHeight; y++)
+            {
+                gScore[x, y] = float.MaxValue;
+                turnScore[x, y] = 0;
+                parent[x, y] = new Vector2Int(-1, -1);
+            }
+        }
+
+        // Force initial corner relation
+        if (InBounds(mustInclude))
+        {
+            parent[start.x, start.y] = mustInclude;
+            gScore[mustInclude.x, mustInclude.y] = 0f;
+            gScore[start.x, start.y] = 1f;
+        }
+
+        // Pre-close neighbors of mustInclude except start (original behavior)
+        if (InBounds(mustInclude))
+        {
+            foreach (var nei in GetNeighbors(mustInclude))
+            {
+                if (nei != start)
+                    closed[nei.x, nei.y] = true;
+            }
+        }
+
+        MinHeap open = new MinHeap(64);
+        open.Push(new Node(start, gScore[start.x, start.y] + Heuristic(start, end)));
+
+        bool strictMode = level > 15; // preserves original branch intent
 
         while (open.Count > 0)
         {
-            open.Sort((a, b) =>
-                fScore.GetValueOrDefault(a, float.MaxValue)
-                .CompareTo(fScore.GetValueOrDefault(b, float.MaxValue)));
+            Node node = open.Pop();
+            Vector2Int current = node.Pos;
 
-            var current = open[0];
-            open.RemoveAt(0);
+            // Skip outdated entries
+            float fExpected = gScore[current.x, current.y] + Heuristic(current, end);
+            if (node.F != fExpected) continue;
 
-            // 목표 도달
             if (current == end)
             {
-                var path = ReconstructPath(cameFrom, current);
-                if (path.Count == 0 || path[0] != mustInclude)
-                    path.Insert(0, mustInclude);
-                Debug.Log(turnScore[current]);
-                return path;
+                var path = Reconstruct(parent, current);
+                return (path, turnScore[current.x, current.y]);
             }
 
-            foreach (var neighbor in GetNeighbors(current))
-            {
-                bool hasPrev = cameFrom.ContainsKey(current);
-                bool isTurn = false;
+            if (closed[current.x, current.y]) continue;
+            closed[current.x, current.y] = true;
 
+            var neighbors = GetNeighbors(current);
+            List<Vector2Int> approved = null;
+
+            foreach (var neighbor in neighbors)
+            {
+                if (closed[neighbor.x, neighbor.y]) continue;
+
+                // Turn detection
+                bool hasPrev = parent[current.x, current.y].x >= 0;
+                bool isTurn = false;
                 if (hasPrev)
                 {
-                    Vector2Int prev = cameFrom[current];
-                    Vector2Int dirPrev = (current - prev);
-                    Vector2Int dirNow = (neighbor - current);
-                    isTurn = (dirPrev != dirNow);
+                    Vector2Int prev = parent[current.x, current.y];
+                    Vector2Int dirPrev = current - prev;
+                    Vector2Int dirNow = neighbor - current;
+                    isTurn = dirPrev != dirNow;
                 }
 
-                int newTurnCount = turnScore[current] + (isTurn ? 1 : 0);
-
-                if (newTurnCount > level)
+                // C-shape closure only in strictMode
+                if (strictMode && hasPrev && IsClosingCShape(parent, current, neighbor))
+                {
+                    closed[neighbor.x, neighbor.y] = true;
                     continue;
-
-                // 1) 방향 유지일 때 추가 가중치 (0~3)
-                float straightWeight = 0f;
-                if (!isTurn)
-                {
-                    straightWeight = Random.Range(0f, 3f);
                 }
 
-                // 2) 기존 randomWeight → turn이 아직 남아있을 때만 적용
-                float randomWeight = (newTurnCount < level)
-                    ? Random.Range(0f, 2f)
-                    : 0.0f;
+                int newTurnCount = turnScore[current.x, current.y] + (isTurn ? 1 : 0);
+                if (newTurnCount > level) continue;
 
-                // 총비용
-                float tentativeG = gScore[current] + 1 + straightWeight + randomWeight;
+                // Weights
+                float straightWeight = 0f;
+                float randomWeight = 0f;
+                float leftBias = 0f;
 
-                if (tentativeG < gScore.GetValueOrDefault(neighbor, float.MaxValue))
+                if (newTurnCount < level)
                 {
-                    cameFrom[neighbor] = current;
-                    gScore[neighbor] = tentativeG;
-                    fScore[neighbor] = tentativeG + Heuristic(neighbor, end);
-                    turnScore[neighbor] = newTurnCount;
+                    if (!isTurn) straightWeight = Random.Range(0f, 3f);
+                    randomWeight = Random.Range(0f, 2f);
 
-                    if (!open.Contains(neighbor))
-                        open.Add(neighbor);
+                    Vector2Int dirNow = neighbor - current;
+                    if (strictMode && dirNow == Vector2Int.left)
+                        leftBias = -5f; // keep original left bias only for strict branch
+                }
+
+                float tentativeG = gScore[current.x, current.y] + 1f + straightWeight + randomWeight + leftBias;
+
+                if (tentativeG < gScore[neighbor.x, neighbor.y])
+                {
+                    gScore[neighbor.x, neighbor.y] = tentativeG;
+                    parent[neighbor.x, neighbor.y] = current;
+                    turnScore[neighbor.x, neighbor.y] = newTurnCount;
+
+                    float f = tentativeG + Heuristic(neighbor, end);
+                    open.Push(new Node(neighbor, f));
+
+                    if (strictMode)
+                    {
+                        // Collect approved only in strict mode (branch with random closing)
+                        approved ??= new List<Vector2Int>(4);
+                        approved.Add(neighbor);
+                    }
                 }
             }
 
+            // Strict mode: keep only one approved neighbor randomly, close rest
+            if (strictMode && approved != null && approved.Count > 1)
+            {
+                int keepIndex = Random.Range(0, approved.Count);
+                Vector2Int keep = approved[keepIndex];
+                for (int i = 0; i < approved.Count; i++)
+                {
+                    if (i != keepIndex)
+                        closed[approved[i].x, approved[i].y] = true;
+                }
+                // Close non-approved neighbors
+                foreach (var nei in neighbors)
+                {
+                    bool wasApproved = false;
+                    for (int i = 0; i < approved.Count; i++)
+                    {
+                        if (approved[i] == nei)
+                        {
+                            wasApproved = true;
+                            break;
+                        }
+                    }
+                    if (!wasApproved)
+                        closed[nei.x, nei.y] = true;
+                }
+            }
         }
 
-        return new List<Vector2Int>();
+        return (null, 999);
     }
 
+    bool InBounds(Vector2Int p) => p.x >= 0 && p.x < gridWidth && p.y >= 0 && p.y < gridHeight;
 
+    bool IsClosingCShape(Vector2Int[,] parent, Vector2Int current, Vector2Int neighbor)
+    {
+        Vector2Int prev = parent[current.x, current.y];
+        if (prev.x < 0) return false;
+        Vector2Int prevPrev = parent[prev.x, prev.y];
+        if (prevPrev.x < 0) return false;
+
+        Vector2Int dirPrevPrev = prev - prevPrev;
+        Vector2Int dirPrev = current - prev;
+        Vector2Int dirNow = neighbor - current;
+
+        if (dirPrev == dirPrevPrev) return false;
+        return dirNow == -dirPrevPrev;
+    }
 
     float Heuristic(Vector2Int a, Vector2Int b)
     {
+        // Manhattan
         return Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y);
     }
 
     List<Vector2Int> GetNeighbors(Vector2Int cell)
     {
-        var neighbors = new List<Vector2Int>();
-        int[] dx = { -1, 1, 0, 0 };
-        int[] dy = { 0, 0, -1, 1 };
-        for (int i = 0; i < 4; i++)
+        List<Vector2Int> list = new List<Vector2Int>(4);
+        for (int i = 0; i < Directions.Length; i++)
         {
-            int nx = cell.x + dx[i];
-            int ny = cell.y + dy[i];
-            if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight)
-                neighbors.Add(new Vector2Int(nx, ny));
+            Vector2Int n = cell + Directions[i];
+            if (n.x >= 0 && n.x < gridWidth && n.y >= 0 && n.y < gridHeight)
+                list.Add(n);
         }
-        return neighbors;
+        return list;
     }
 
-    List<Vector2Int> ReconstructPath(Dictionary<Vector2Int, Vector2Int> cameFrom, Vector2Int current)
+    List<Vector2Int> Reconstruct(Vector2Int[,] parent, Vector2Int current)
     {
-        var path = new List<Vector2Int> { current };
-        while (cameFrom.ContainsKey(current))
+        List<Vector2Int> path = new List<Vector2Int>(64);
+        path.Add(current);
+        while (true)
         {
-            current = cameFrom[current];
-            path.Add(current);
+            Vector2Int p = parent[current.x, current.y];
+            if (p.x < 0) break;
+            path.Add(p);
+            current = p;
         }
         path.Reverse();
         return path;
@@ -168,45 +293,117 @@ public class SpawnObstacle : MonoBehaviour
 
     Vector2Int WorldToGrid(Vector2 world)
     {
-        int x = Mathf.Clamp(Mathf.FloorToInt((world.x - installMin.x) / cellSize), 0, gridWidth - 1);
-        int y = Mathf.Clamp(Mathf.FloorToInt((world.y - installMin.y) / cellSize), 0, gridHeight - 1);
+        int x = Mathf.Clamp(
+            Mathf.FloorToInt((world.x - installMin.x) / cellSize),
+            0, gridWidth - 1);
+        int y = Mathf.Clamp(
+            Mathf.FloorToInt((world.y - installMin.y) / cellSize),
+            0, gridHeight - 1);
         return new Vector2Int(x, y);
     }
 
     Vector2 GridToWorld(Vector2Int gridPos)
     {
         return new Vector2(
-            installMin.x + gridPos.x * cellSize + cellSize / 2f,
-            installMin.y + gridPos.y * cellSize + cellSize / 2f
+            installMin.x + gridPos.x * cellSize + cellSize * 0.5f,
+            installMin.y + gridPos.y * cellSize + cellSize * 0.5f
         );
     }
 
     void PlaceObstacles(List<Vector2Int> path)
     {
-        HashSet<Vector2Int> pathSet = new HashSet<Vector2Int>(path);
-        HashSet<Vector2Int> obstacleCandidates = new HashSet<Vector2Int>();
+        if (path == null || obstacleList == null || obstacleList.Count == 0) return;
 
-        foreach (var cell in path)
+        HashSet<Vector2Int> pathSet = new HashSet<Vector2Int>(path);
+        HashSet<Vector2Int> candidates = new HashSet<Vector2Int>();
+
+        for (int i = 0; i < path.Count; i++)
         {
-            foreach (var neighbor in GetNeighbors(cell))
+            Vector2Int cell = path[i];
+            foreach (var n in GetNeighbors(cell))
             {
-                if (!pathSet.Contains(neighbor))
-                {
-                    obstacleCandidates.Add(neighbor);
-                }
+                if (!pathSet.Contains(n))
+                    candidates.Add(n);
             }
         }
 
-        foreach (var cell in obstacleCandidates)
+        foreach (var cell in candidates)
         {
             Vector2 worldPos = GridToWorld(cell);
-
-            ObstacleInfo obstacle = obstacleList[Random.Range(0, obstacleList.Count)];
-
+            var obstacle = obstacleList[Random.Range(0, obstacleList.Count)];
             GameObject obj = objectPool.Get(obstacle.prefab, transform);
             obj.transform.position = new Vector3(worldPos.x, 0f, worldPos.y);
             obj.transform.rotation = Quaternion.identity;
-            obj.transform.SetParent(transform);
+            obj.transform.SetParent(transform, true);
+        }
+    }
+
+    // ---------------- Min-Heap (priority queue) ----------------
+    struct Node
+    {
+        public Vector2Int Pos;
+        public float F;
+        public Node(Vector2Int p, float f)
+        {
+            Pos = p;
+            F = f;
+        }
+    }
+
+    class MinHeap
+    {
+        List<Node> data;
+        public int Count => data.Count;
+
+        public MinHeap(int capacity) { data = new List<Node>(capacity); }
+
+        public void Push(Node n)
+        {
+            data.Add(n);
+            SiftUp(data.Count - 1);
+        }
+
+        public Node Pop()
+        {
+            int last = data.Count - 1;
+            Node root = data[0];
+            data[0] = data[last];
+            data.RemoveAt(last);
+            if (data.Count > 0) SiftDown(0);
+            return root;
+        }
+
+        void SiftUp(int i)
+        {
+            while (i > 0)
+            {
+                int parent = (i - 1) >> 1;
+                if (data[parent].F <= data[i].F) break;
+                Swap(parent, i);
+                i = parent;
+            }
+        }
+
+        void SiftDown(int i)
+        {
+            int count = data.Count;
+            while (true)
+            {
+                int left = (i << 1) + 1;
+                if (left >= count) break;
+                int right = left + 1;
+                int smallest = (right < count && data[right].F < data[left].F) ? right : left;
+                if (data[i].F <= data[smallest].F) break;
+                Swap(i, smallest);
+                i = smallest;
+            }
+        }
+
+        void Swap(int a, int b)
+        {
+            Node tmp = data[a];
+            data[a] = data[b];
+            data[b] = tmp;
         }
     }
 }

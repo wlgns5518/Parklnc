@@ -9,7 +9,7 @@ public class CarMovement : MonoBehaviour
     private bool isStopped = false; // 충돌 후 멈추는 상태 플래그
 
     [SerializeField] private float moveSpeed = 3f;
-    //[SerializeField] private float acceleration = 2f; // 가속도 추가
+    [SerializeField] private float acceleration = 1f; // 가속도 추가
     [SerializeField] private float rotationSpeed = 5f; // 회전 속도 추가
     [SerializeField] private float stopDuration = 1f; // 충돌 후 멈출 시간
     [Header("effect")]
@@ -92,8 +92,8 @@ public class CarMovement : MonoBehaviour
 
         if (moveDirection != Vector3.zero)
         {
-            //moveSpeed += acceleration * Time.fixedDeltaTime; // 점진적 가속
-            //moveSpeed = Mathf.Clamp(moveSpeed, 3f, 10f); // 최대 속도 제한
+            moveSpeed += acceleration * Time.fixedDeltaTime; // 점진적 가속
+            moveSpeed = Mathf.Clamp(moveSpeed, 3f, 7f); // 최대 속도 제한
 
             // A, D 키를 누르는 동안만 회전 적용
             if (inputValue.x != 0)

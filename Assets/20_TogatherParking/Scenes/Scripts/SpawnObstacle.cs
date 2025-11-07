@@ -7,28 +7,28 @@ public class SpawnObstacle : MonoBehaviour
     public struct ObstacleInfo
     {
         public GameObject prefab;
-        public Vector2 sizeXZ; // size.x = width(x), size.y = depth(z)
+        public Vector2 sizeXZ; // size.x = 가로(x), size.y = 세로(z)
     }
 
     public List<ObstacleInfo> obstacleList;
 
-    public Vector2 installMin = new Vector2(0f, 1f);
-    public Vector2 installMax = new Vector2(40f, 19f);
+    public Vector2 installMin = new Vector2(0f, 1f);   // 설치 가능한 최소 좌표(x, z)
+    public Vector2 installMax = new Vector2(40f, 19f); // 설치 가능한 최대 좌표(x, z)
 
-    public Vector2 carStart = new Vector2(3f, 3f);
-    public Vector2 carEnd = new Vector2(37f, 17.5f);
+    public Vector2 carStart = new Vector2(3f, 3f);     // 차량 시작 위치
+    public Vector2 carEnd = new Vector2(37f, 17.5f);   // 차량 도착 위치
 
-    public float cellSize = 2f;
+    public float cellSize = 2f;                        // 그리드 셀 크기
 
-    public ObjectPool objectPool;
+    public ObjectPool objectPool;                      // 오브젝트 풀 참조
 
     int gridWidth;
     int gridHeight;
 
-    // Forced second cell for initial corner logic (kept from original)
+    // 초기 코너 강제 설정용 두 번째 셀 (원래 코드 유지)
     readonly Vector2Int mustInclude = new Vector2Int(1, 0);
 
-    // Directions (L R D U)
+    // 이동 방향 (왼쪽, 오른쪽, 아래, 위)
     static readonly Vector2Int[] Directions =
     {
         Vector2Int.left, Vector2Int.right, Vector2Int.down, Vector2Int.up
@@ -36,7 +36,7 @@ public class SpawnObstacle : MonoBehaviour
 
     void Start()
     {
-        // Preload obstacles
+        // 장애물 미리 생성
         if (objectPool != null)
         {
             foreach (var o in obstacleList)
@@ -54,6 +54,7 @@ public class SpawnObstacle : MonoBehaviour
         PlaceObstacles(path);
     }
 
+    // 랜덤 가중치 기반 경로 탐색 (최적 경로 반환)
     List<Vector2Int> FindPathWithRandomWeight(int level)
     {
         const int safetyAttempts = 200;
@@ -75,7 +76,7 @@ public class SpawnObstacle : MonoBehaviour
 
             if (turns == level)
             {
-                Debug.Log($"코너 {level}개 정확히 생성 성공 (attempt {i})");
+                Debug.Log($"코너 {level}개 정확히 생성 성공 (시도 {i})");
                 return path;
             }
         }
@@ -84,29 +85,30 @@ public class SpawnObstacle : MonoBehaviour
         return bestPath;
     }
 
+    // 실제 경로 생성 시도
     (List<Vector2Int> path, int turns) TryFindPath(int level)
     {
         Vector2Int start = WorldToGrid(carStart);
         Vector2Int end = WorldToGrid(carEnd);
 
-        // Allocate arrays (fast, avoids dictionary overhead)
+        // 배열 할당 (빠른 접근, Dictionary 사용보다 효율적)
         float[,] gScore = new float[gridWidth, gridHeight];
         int[,] turnScore = new int[gridWidth, gridHeight];
         Vector2Int[,] parent = new Vector2Int[gridWidth, gridHeight];
         bool[,] closed = new bool[gridWidth, gridHeight];
 
-        // Initialize
+        // 초기화
         for (int x = 0; x < gridWidth; x++)
         {
             for (int y = 0; y < gridHeight; y++)
             {
-                gScore[x, y] = float.MaxValue;
-                turnScore[x, y] = 0;
-                parent[x, y] = new Vector2Int(-1, -1);
+                gScore[x, y] = float.MaxValue;     // 비용 무한대로 초기화
+                turnScore[x, y] = 0;               // 코너 수 초기화
+                parent[x, y] = new Vector2Int(-1, -1); // 부모 좌표 초기화
             }
         }
 
-        // Force initial corner relation
+        // 초기 코너 강제 지정
         if (InBounds(mustInclude))
         {
             parent[start.x, start.y] = mustInclude;
@@ -114,7 +116,7 @@ public class SpawnObstacle : MonoBehaviour
             gScore[start.x, start.y] = 1f;
         }
 
-        // Pre-close neighbors of mustInclude except start (original behavior)
+        // mustInclude 주변 셀은 start 제외하고 닫음 (원래 코드 동작 유지)
         if (InBounds(mustInclude))
         {
             foreach (var nei in GetNeighbors(mustInclude))
@@ -127,14 +129,14 @@ public class SpawnObstacle : MonoBehaviour
         MinHeap open = new MinHeap(64);
         open.Push(new Node(start, gScore[start.x, start.y] + Heuristic(start, end)));
 
-        bool strictMode = level > 15; // preserves original branch intent
+        bool strictMode = level > 15; // 고레벨에서는 stricter branching 적용
 
         while (open.Count > 0)
         {
             Node node = open.Pop();
             Vector2Int current = node.Pos;
 
-            // Skip outdated entries
+            // 업데이트 안 된 노드는 스킵
             float fExpected = gScore[current.x, current.y] + Heuristic(current, end);
             if (node.F != fExpected) continue;
 
@@ -154,7 +156,7 @@ public class SpawnObstacle : MonoBehaviour
             {
                 if (closed[neighbor.x, neighbor.y]) continue;
 
-                // Turn detection
+                // 코너(turn) 체크
                 bool hasPrev = parent[current.x, current.y].x >= 0;
                 bool isTurn = false;
                 if (hasPrev)
@@ -165,7 +167,7 @@ public class SpawnObstacle : MonoBehaviour
                     isTurn = dirPrev != dirNow;
                 }
 
-                // C-shape closure only in strictMode
+                // strict 모드에서 C자 형태 막기
                 if (strictMode && hasPrev && IsClosingCShape(parent, current, neighbor))
                 {
                     closed[neighbor.x, neighbor.y] = true;
@@ -175,7 +177,7 @@ public class SpawnObstacle : MonoBehaviour
                 int newTurnCount = turnScore[current.x, current.y] + (isTurn ? 1 : 0);
                 if (newTurnCount > level) continue;
 
-                // Weights
+                // 이동 가중치 계산
                 float straightWeight = 0f;
                 float randomWeight = 0f;
                 float leftBias = 0f;
@@ -187,7 +189,7 @@ public class SpawnObstacle : MonoBehaviour
 
                     Vector2Int dirNow = neighbor - current;
                     if (strictMode && dirNow == Vector2Int.left)
-                        leftBias = -5f; // keep original left bias only for strict branch
+                        leftBias = -5f; // strict 모드에서 왼쪽 선호 유지
                 }
 
                 float tentativeG = gScore[current.x, current.y] + 1f + straightWeight + randomWeight + leftBias;
@@ -203,14 +205,14 @@ public class SpawnObstacle : MonoBehaviour
 
                     if (strictMode)
                     {
-                        // Collect approved only in strict mode (branch with random closing)
+                        // 승인된 neighbor 수집 (strict 모드)
                         approved ??= new List<Vector2Int>(4);
                         approved.Add(neighbor);
                     }
                 }
             }
 
-            // Strict mode: keep only one approved neighbor randomly, close rest
+            // strict 모드: 승인된 neighbor 중 하나만 유지, 나머지 닫기
             if (strictMode && approved != null && approved.Count > 1)
             {
                 int keepIndex = Random.Range(0, approved.Count);
@@ -220,7 +222,7 @@ public class SpawnObstacle : MonoBehaviour
                     if (i != keepIndex)
                         closed[approved[i].x, approved[i].y] = true;
                 }
-                // Close non-approved neighbors
+                // 승인 안 된 neighbor도 닫기
                 foreach (var nei in neighbors)
                 {
                     bool wasApproved = false;
@@ -238,11 +240,12 @@ public class SpawnObstacle : MonoBehaviour
             }
         }
 
-        return (null, 999);
+        return (null, 999); // 경로 실패 시
     }
 
     bool InBounds(Vector2Int p) => p.x >= 0 && p.x < gridWidth && p.y >= 0 && p.y < gridHeight;
 
+    // C자 형태 막기 체크
     bool IsClosingCShape(Vector2Int[,] parent, Vector2Int current, Vector2Int neighbor)
     {
         Vector2Int prev = parent[current.x, current.y];
@@ -258,12 +261,13 @@ public class SpawnObstacle : MonoBehaviour
         return dirNow == -dirPrevPrev;
     }
 
+    // 휴리스틱 (맨해튼 거리)
     float Heuristic(Vector2Int a, Vector2Int b)
     {
-        // Manhattan
         return Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y);
     }
 
+    // 상하좌우 이웃 반환
     List<Vector2Int> GetNeighbors(Vector2Int cell)
     {
         List<Vector2Int> list = new List<Vector2Int>(4);
@@ -276,6 +280,7 @@ public class SpawnObstacle : MonoBehaviour
         return list;
     }
 
+    // 경로 재구성
     List<Vector2Int> Reconstruct(Vector2Int[,] parent, Vector2Int current)
     {
         List<Vector2Int> path = new List<Vector2Int>(64);
@@ -291,6 +296,7 @@ public class SpawnObstacle : MonoBehaviour
         return path;
     }
 
+    // 월드 좌표 → 그리드 좌표
     Vector2Int WorldToGrid(Vector2 world)
     {
         int x = Mathf.Clamp(
@@ -302,6 +308,7 @@ public class SpawnObstacle : MonoBehaviour
         return new Vector2Int(x, y);
     }
 
+    // 그리드 좌표 → 월드 좌표 (셀 중앙)
     Vector2 GridToWorld(Vector2Int gridPos)
     {
         return new Vector2(
@@ -310,6 +317,7 @@ public class SpawnObstacle : MonoBehaviour
         );
     }
 
+    // 장애물 배치
     void PlaceObstacles(List<Vector2Int> path)
     {
         if (path == null || obstacleList == null || obstacleList.Count == 0) return;
@@ -338,7 +346,7 @@ public class SpawnObstacle : MonoBehaviour
         }
     }
 
-    // ---------------- Min-Heap (priority queue) ----------------
+    // ---------------- 최소 힙 (우선순위 큐) ----------------
     struct Node
     {
         public Vector2Int Pos;

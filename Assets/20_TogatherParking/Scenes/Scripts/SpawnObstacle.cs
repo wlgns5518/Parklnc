@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+ï»¿using System.Collections.Generic;
 using UnityEngine;
 
 public class SpawnObstacle : MonoBehaviour
@@ -18,34 +18,34 @@ public class SpawnObstacle : MonoBehaviour
     public Vector2 carStart = new Vector2(3f, 3f);       // x, z
     public Vector2 carEnd = new Vector2(37f, 17.5f);     // x, z
 
-    public float cellSize = 2f; // °İÀÚ ¼¿ Å©±â
+    public float cellSize = 2f; // ê²©ì ì…€ í¬ê¸°
 
     int gridWidth, gridHeight;
 
-    public ObjectPool objectPool; // ÀÎ½ºÆåÅÍ¿¡¼­ ÇÒ´ç
+    public ObjectPool objectPool; // ì¸ìŠ¤í™í„°ì—ì„œ í• ë‹¹
 
     void Start()
     {
-        // ¿ÀºêÁ§Æ® Ç® ¹Ì¸® »ı¼º
+        // ì˜¤ë¸Œì íŠ¸ í’€ ë¯¸ë¦¬ ìƒì„±
         foreach (var obstacle in obstacleList)
         {
             objectPool.Preload(obstacle.prefab, 10, transform);
         }
 
-        // GameManager¿¡¼­ ·¹º§ ¹Ş¾Æ¿À±â
+        // GameManagerì—ì„œ ë ˆë²¨ ë°›ì•„ì˜¤ê¸°
         int level = 1;
         if (GameManager.Instance != null)
             level = GameManager.Instance.CurrentLevel;
         Debug.Log(level);
 
-        // 1. °İÀÚ »ı¼º
+        // 1. ê²©ì ìƒì„±
         gridWidth = Mathf.CeilToInt((installMax.x - installMin.x) / cellSize);
         gridHeight = Mathf.CeilToInt((installMax.y - installMin.y) / cellSize);
 
-        // 2. 1È¸ Å½»öÀ¸·Î ·¹º§ ÄÚ³Ê ¼ö ¸ÂÃß±â
+        // 2. 1íšŒ íƒìƒ‰ìœ¼ë¡œ ë ˆë²¨ ì½”ë„ˆ ìˆ˜ ë§ì¶”ê¸°
         List<Vector2Int> path = FindPathWithRandomWeight(level);
 
-        // 3. Àå¾Ö¹° ¹èÄ¡
+        // 3. ì¥ì• ë¬¼ ë°°ì¹˜
         PlaceObstacles(path);
     }
 
@@ -72,7 +72,7 @@ public class SpawnObstacle : MonoBehaviour
             var current = open[0];
             open.RemoveAt(0);
 
-            // ¸ñÇ¥ µµ´Ş
+            // ëª©í‘œ ë„ë‹¬
             if (current == end)
             {
                 var path = ReconstructPath(cameFrom, current);
@@ -84,7 +84,6 @@ public class SpawnObstacle : MonoBehaviour
 
             foreach (var neighbor in GetNeighbors(current))
             {
-                //  ÀÌÀü ¹æÇâÀÌ Á¸ÀçÇÏ´Â °æ¿ì¿¡¸¸ turn °è»ê
                 bool hasPrev = cameFrom.ContainsKey(current);
                 bool isTurn = false;
 
@@ -98,16 +97,23 @@ public class SpawnObstacle : MonoBehaviour
 
                 int newTurnCount = turnScore[current] + (isTurn ? 1 : 0);
 
-                //  turn limit ÃÊ°ú ½Ã È®Àå ±İÁö
                 if (newTurnCount > level)
                     continue;
 
-                //  turn == levelÀÌ¸é ÀÌÈÄ Å½»öÀº ¼ø¼ö ÃÖ´Ü°Å¸®
+                // 1) ë°©í–¥ ìœ ì§€ì¼ ë•Œ ì¶”ê°€ ê°€ì¤‘ì¹˜ (0~3)
+                float straightWeight = 0f;
+                if (!isTurn)
+                {
+                    straightWeight = Random.Range(0f, 3f);
+                }
+
+                // 2) ê¸°ì¡´ randomWeight â†’ turnì´ ì•„ì§ ë‚¨ì•„ìˆì„ ë•Œë§Œ ì ìš©
                 float randomWeight = (newTurnCount < level)
-                    ? (float)rand.NextDouble() * 2.0f
+                    ? Random.Range(0f, 2f)
                     : 0.0f;
 
-                float tentativeG = gScore[current] + 1 + randomWeight;
+                // ì´ë¹„ìš©
+                float tentativeG = gScore[current] + 1 + straightWeight + randomWeight;
 
                 if (tentativeG < gScore.GetValueOrDefault(neighbor, float.MaxValue))
                 {
@@ -120,6 +126,7 @@ public class SpawnObstacle : MonoBehaviour
                         open.Add(neighbor);
                 }
             }
+
         }
 
         return new List<Vector2Int>();
